@@ -103,7 +103,7 @@ form.duz textarea{ min-height:64px; resize:vertical; }
     </div>
   </header>
   <h1>Menü incelemesi<span class="n">.</span></h1>
-  <p class="giris">Menüdeki ürünleri gözden geçirin. Değiştirmek ya da kaldırmak istediklerinizi işaretleyin, eklemek istediklerinizi yazın. Bitirince sayfanın altındaki düğmeyle isteklerinizi gönderin; menü buna göre güncellenir.</p>
+  <p class="giris">Menüdeki ürünleri gözden geçirin. Değiştirmek ya da kaldırmak istediklerinizi işaretleyin, eklemek istediklerinizi yazın. İstekleriniz kendiliğinden kaydedilir; menü buna göre güncellenir.</p>
   <ul class="nasil">
     <li><svg class="ik" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.500 6.500l4 4"/></svg>Adı, açıklamayı ya da fiyatı düzenle</li>
     <li><svg class="ik" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>Ürünü menüden kaldır</li>
@@ -130,7 +130,7 @@ form.duz textarea{ min-height:64px; resize:vertical; }
     <div class="kopya">
       <button class="btn ana" id="wa">WhatsApp ile gönder</button>
       <button class="btn" id="kopyala">İsteklerin özetini kopyala</button>
-      <small id="kopyaYazi">İstekleriniz bu cihazda saklanır; bitirince özeti gönderin.</small>
+      <small id="kopyaYazi">İstekleriniz kaydedilir; isterseniz özeti ayrıca gönderebilirsiniz.</small>
     </div>
     <textarea id="ozetMetin" hidden readonly aria-label="İsteklerin özeti"></textarea>
   </section>
@@ -219,11 +219,26 @@ function ciz(){
   document.querySelectorAll(".sube button").forEach(b => b.setAttribute("aria-pressed", b.dataset.sube === sube));
 }
 
-/* kayıt: bu cihazda saklanır */
+/* kayıt: önce bu cihaza, sonra Google E-Tablo'ya. TABLO_URL boşsa yalnızca bu cihazda saklanır. */
+const TABLO_URL = "https://script.google.com/macros/s/AKfycbz5esfI6CE07dJKEimsGLooHnoLaiGN0alm1PkgyETFA6Vbk8AThgjYfb7U-CdeMW6S/exec";
+const BEKLEYEN = "mardo-menu-inceleme-bekleyen";          // tabloya henüz ulaşmamış anahtarlar
+const bekleyenOku = () => { try { return new Set(JSON.parse(localStorage.getItem(BEKLEYEN) || "[]")); } catch (e) { return new Set(); } };
+const bekleyenYaz = b => { try { localStorage.setItem(BEKLEYEN, JSON.stringify([...b])); } catch (e) {} };
+let bekleyen = bekleyenOku();
+const kuyruk = {};
+function gonder(key){                                      // anahtar başına sırayla, hep en güncel değeri yollar
+  const onceki = kuyruk[key] || Promise.resolve();
+  return kuyruk[key] = onceki.catch(() => {}).then(() => fetch(TABLO_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ key, veri: istek[key] || null }) }))
+    .then(r => r.json()).then(j => { if (!j.ok) throw new Error(j.hata || "kaydedilemedi"); bekleyen.delete(key); bekleyenYaz(bekleyen); });
+}
+function durumYaz(){ if (bekleyen.size) durum("hata", "Bağlantı yok: " + bekleyen.size + " istek bu cihazda bekliyor"); else durum("ok", "Kaydedildi"); }
 function kaydet(key, veri){
   if (veri) istek[key] = veri; else delete istek[key];
   yerelYaz(); ciz();
-  durum("ok", "Bu cihazda saklandı");
+  if (!TABLO_URL) { durum("ok", "Bu cihazda saklandı"); return; }
+  bekleyen.add(key); bekleyenYaz(bekleyen); durum("", "Kaydediliyor…");
+  gonder(key).then(durumYaz, durumYaz);
 }
 const bul = key => urunler(key[0]).find(u => u.key === key);     // yalnızca mevcut ürünler (anahtar k-… / d-…)
 const simdi = () => new Date().toISOString();
@@ -287,7 +302,18 @@ $("kopyala").addEventListener("click", () => {
 
 /* açılış */
 istek = yerelOku(); ciz();
-durum("ok", "Bu cihazda saklanıyor");
+if (!TABLO_URL) durum("ok", "Bu cihazda saklanıyor");
+else {
+  durum("", "Bağlanıyor…");
+  fetch(TABLO_URL).then(r => r.json()).then(j => {
+    if (!j.ok) throw new Error(j.hata);
+    const uzak = j.istekler || {};
+    bekleyen.forEach(k => { if (istek[k]) uzak[k] = istek[k]; else delete uzak[k]; });   // gönderilememiş yerel değişiklikler korunur
+    istek = uzak; yerelYaz(); if (!acik) ciz();
+    return Promise.all([...bekleyen].map(k => gonder(k).catch(() => {})));
+  }).then(durumYaz, () => durum("hata", "Bağlanılamadı; istekler bu cihazda saklanıyor"));
+  window.addEventListener("online", () => { [...bekleyen].forEach(k => gonder(k).then(durumYaz, durumYaz)); });
+}
 </script>
 
 </body>
